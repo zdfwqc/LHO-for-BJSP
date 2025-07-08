@@ -4,7 +4,9 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from  memory import Memory
+from network.deepSubmudularFunc import DSFDeepSet
 from network.deepSetNet import DeepSetNet
+from network.GIN import GINsolver
 
 def train_model(memory, model, num_epochs=200, batch_size=256, learning_rate=0.0002, testMemory=None,
                 modelName = 'model', l2_lambda=0.01):
@@ -60,19 +62,21 @@ def train_model(memory, model, num_epochs=200, batch_size=256, learning_rate=0.0
                     print(f'\033[91m测试集平均Loss: {avg_test_loss:.4f}\033[0m')  # 红色字体打印
 
                 model.train()  # 恢复训练模式
-    savePath = 'model/'+modelName+'.pth'
-    torch.save(model.state_dict(), savePath)
-    print('模型已保存到' + savePath)
-    
-    np.save('log/'+modelName+'_train_loss.npy',train_losses)
-    np.save('log/'+modelName+'_test_loss.npy',test_losses)
+            savePath = 'model/'+modelName+'.pth'
+            torch.save(model.state_dict(), savePath)
+            print('模型已保存到' + savePath)
+
+            np.save('log/'+modelName+'_train_loss.npy',train_losses)
+            np.save('log/'+modelName+'_test_loss.npy',test_losses)
     return model
 
 if __name__ == '__main__':
     k = 7
     memory = Memory.load('trainData/TrainData_' + str(k) + '_5')
-    memory.normalize()
+    #memory.normalize()
     train,test = memory.split_memory(0.1)
 
-    model = DeepSetNet(input_dim=15)
-    train_model(model = model,memory=train, modelName='dsh75_NORM',testMemory=test, l2_lambda=0.01,num_epochs=1000)
+    #model = DeepSetNet(input_dim=15)
+    model = DSFDeepSet(input_dim=15)
+    #model = GINsolver(input_dim=3)
+    train_model(model = model,memory=train, modelName='dsf75',testMemory=test, learning_rate=0.0008,l2_lambda=0.001,num_epochs=1000)

@@ -11,14 +11,14 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 class LHOSolver:
 
-    def __init__(self,numofMachines,k = 5):
+    def __init__(self,numofMachines,k = 5,net = DeepSetNet()):
         self.PTmask = None
         self.curSelect = None
         self.mask = None
         self.numofJobs = None
         self.numofMachines = numofMachines
         self.CPSolver = CPSolver()
-        self.chooseNet = DeepSetNet(input_dim=3*numofMachines)
+        self.chooseNet = net
         self.chooseNet.eval()
         self.k = k
 
@@ -39,6 +39,10 @@ class LHOSolver:
     def randomChoose(self,k,randomSeed = 2005):
         # k 为目标选取的数量
         np.random.seed(randomSeed)
+        available_jobs = [j for j in range(len(self.mask)) if self.mask[j] == 0 and j not in self.curSelect]
+        num_additional = min(k - len(self.curSelect), len(available_jobs))
+        if num_additional <=0 :
+            return
         while len(self.curSelect) < k:
             available_jobs = [j for j in range(len(self.mask)) if self.mask[j] == 0 and j not in self.curSelect]
             num_additional = min(k - len(self.curSelect), len(available_jobs))
@@ -84,17 +88,110 @@ class LHOSolver:
                                                             self.PTmask[self.curSelect])
                 score.append(schedule.cal_utilization())
                 self.curSelect.remove(job)
-            # 选择得分最高的作业
             selected_job = available_jobs[np.argmax(score)]
             self.curSelect.append(selected_job)
             self.mask[selected_job] = 1
+
+    
+    def GuidedRandomGreedyChoose(self,k,data,eps = 0.1, t=0.3):
+        # 2024nips的非单调次模函数优化算法
+        # 先局部搜索得到一个初始解
+        self.greedyChoose(k,data)
+        fz = 0
+        current_utilization = 0
+        while (1):
+            jobs_features = getJobFeature(data,self.PTmask,self.curSelect)
+            with torch.no_grad():
+                jobs_features = torch.tensor(jobs_features,dtype=torch.float)
+                fz = self.chooseNet(jobs_features).item()
+            available_jobs = [j for j in range(len(self.mask)) if self.mask[j] == 0 and j not in self.curSelect]
+            noExist = True
+            for selected_job in self.curSelect[:]:
+                for available_job in available_jobs[:]:
+                    self.curSelect.remove(selected_job)
+                    self.curSelect.append(available_job)
+                    
+                    # 计算交换后的效用值
+                    jobs_features = getJobFeature(data,self.PTmask,self.curSelect)
+                    with torch.no_grad():
+                        jobs_features = torch.tensor(jobs_features,dtype=torch.float)
+                        new_utilization = self.chooseNet(jobs_features).item()
+                    
+                    # 如果新效用值比当前效用值提升超过阈值(这里设为0.1)
+                    if new_utilization > current_utilization + fz*eps/self.k:
+                        # 保持交换
+                        self.mask[selected_job] = 0
+                        self.mask[available_job] = 1
+                        available_jobs.remove(available_job)
+                        current_utilization = new_utilization
+                        noExist = False
+                        break
+                    else:
+                        # 恢复原状
+                        self.curSelect.remove(available_job)
+                        self.curSelect.append(selected_job)
+                if not noExist:
+                    break
+            if noExist:
+                break
+
+        # 利用Z引导集合进行随机贪婪搜索
+        # 记录当前的选择集合Z
+        Z = self.curSelect.copy()
+
+        # 清空当前选择
+        self.curSelect = []
+        self.mask = np.zeros(len(self.mask))
+        max_score = 0
+        while (len(self.curSelect) < k):
+            available_jobs = [j for j in range(len(self.mask)) if self.mask[j] == 0 and j not in self.curSelect]
+            if (len(self.curSelect)< t*k):
+                # 在前t*k个选择中,只考虑不在Z中的工件
+                available_jobs = [j for j in available_jobs if j not in Z]
+                if len(available_jobs) == 0:  # 如果Z中没有可用工件,则使用所有可用工件
+                    available_jobs = [j for j in range(len(self.mask)) if self.mask[j] == 0 and j not in self.curSelect]
+            score = []
+            for job in available_jobs:
+                self.curSelect.append(job)
+                jobs_features = getJobFeature(data,self.PTmask,self.curSelect)
+                with torch.no_grad():
+                    jobs_features = torch.tensor(jobs_features,dtype=torch.float)
+                    predicted_utilization = self.chooseNet(jobs_features)
+                score.append(predicted_utilization.item())
+                self.curSelect.remove(job)
+            # 找出所有与最高分差距不超过0.05的工作
+            max_score = np.max(score)
+            good_jobs = [i for i, s in enumerate(score) if max_score - s <= 0.05]
+            # 从这些工作中随机选择一个
+            selected_idx = np.random.choice(good_jobs)
+            selected_job = available_jobs[selected_idx]
+            self.curSelect.append(selected_job)
+            self.mask[selected_job] = 1
+        if fz > max_score:
+            # 如果Z的分数更高,恢复Z的分配结果
+            self.curSelect = Z.copy()
+            self.mask = np.zeros(len(self.mask))
+            for job in Z:
+                self.mask[job] = 1
+        return
+                
+    
+            
+
         
     
-    def chooseJobs(self,originData,model = 'net'):
+    def chooseJobs(self,originData,model = 'net',initChoose = 'random'):
         k = self.k
         if len(self.curSelect) == 0:
             # 第一次选择姑且暂定为随机
-            self.randomChoose(k)
+            if initChoose == 'random':
+                self.randomChoose(k)
+            elif initChoose == 'greedy':
+                self.greedyChoose(k,originData)
+            elif initChoose == 'CPGreedy':
+                self.CPGreedyChoose(k,originData)
+            elif initChoose == 'GRGC':
+                self.GuidedRandomGreedyChoose(k,originData)
             return
         if model == 'random':
             self.randomChoose(k)
@@ -106,7 +203,7 @@ class LHOSolver:
             raise ValueError(f"Invalid model: {model}")
         return 
 
-    def solve(self,data,model = 'net',clipModel = 'earliest' ,clipCount = 12):
+    def solve(self,data,model = 'net',clipModel = 'earliest' ,clipCount = 12,initChoose = 'random'):
         cpSolver = CPSolver()
         numofJobs = len(data[0])
         numofMachines = len(data[0][0])
@@ -119,8 +216,8 @@ class LHOSolver:
         baseTime = 0
 
         while sovleCount < numofJobs:
-
-            self.chooseJobs(originData=data,model = model)
+            print(f"已完成进度: {sovleCount}/{numofJobs}, 当前完成率: {(sovleCount/numofJobs)*100:.2f}%")
+            self.chooseJobs(originData=data,model = model,initChoose = initChoose)
             schedule = cpSolver.solve_blocking_job_shop([data[0][self.curSelect],data[1][self.curSelect]],
                                                         self.PTmask[self.curSelect])
             for record in schedule.record:
@@ -172,11 +269,18 @@ class LHOSolver:
 
 
 if __name__ == "__main__":
-    data = np.load('benchmark/la/la11.npy',allow_pickle=True)
-    data = data[0]
-    solver = LHOSolver(numofMachines=5,k = 5)
+    # data = np.load('benchmark/la/la11.npy',allow_pickle=True)
+    # data = data[0]
+    # solver = LHOSolver(numofMachines=20,k = 20)
+    # solver.reset(data)
+    # print(solver.solve(data,model='random'))
+    # ========== ta80数据测试 ===========
+    ta80_path = os.path.join(os.path.dirname(__file__), 'benchmark/ta/ta78.txt')
+    all_mat = np.loadtxt(ta80_path, delimiter='\t').astype(int)
+    time_mat = all_mat[:100, :]
+    machine_mat = (all_mat[100:, :] + 1).astype(int)
+    n_jobs, n_machines = time_mat.shape
+    data = [time_mat, machine_mat]
+    solver = LHOSolver(numofMachines=n_machines, k=n_machines)
     solver.reset(data)
-    solver.loadNet('model/dsh75_NORM.pth')
-    print(solver.solve(data,model='net'))
-
-    print(solver.solve(data, model='greedy'))
+    print(ta80_path + ' makespan:', solver.solve(data, model='random'))

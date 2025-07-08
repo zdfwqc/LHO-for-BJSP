@@ -1,14 +1,15 @@
 import numpy as np
 from CPSolver import CPSolver
-from blocking_job_shop import solve_blocking_job_shop
 from uniform_instance_gen import uni_instance_gen
 from memory import Memory
 import time
 from tqdm import tqdm
 from netTools import getJobFeature
 from  schedule import Schedule
+from params import configs
 
-def generate_memory_data(num_instances=1000, n_jobs=5, m_machines=5, memory_size=100000):
+
+def generate_memory_data(num_instances=1000, n_jobs=5, m_machines=5, memory_size=100000,time_limit=100):
     memory = Memory(num_machines=m_machines, capacity=memory_size)
     print(f"开始生成{num_instances}个训练实例...")
     for i in tqdm(range(num_instances)):
@@ -44,7 +45,7 @@ def generate_memory_data(num_instances=1000, n_jobs=5, m_machines=5, memory_size
 
         # 使用CP求解器求解
         cpSolver = CPSolver()
-        schedule = cpSolver.solve_blocking_job_shop(data,ptMask)
+        schedule = cpSolver.solve_blocking_job_shop(data,ptMask,time_limit=100)
         jobs_features = getJobFeature(data, ptMask,range(n_jobs))
         memory.push(jobs_features, schedule.cal_utilization())
 
@@ -56,10 +57,11 @@ def generate_memory_data(num_instances=1000, n_jobs=5, m_machines=5, memory_size
 if __name__ == "__main__":
     # 生成数据并存储到memory
     memory = generate_memory_data(
-        num_instances=5000,  # 生成1000个实例
-        n_jobs=7,  # 10个工件
-        m_machines=5,  # 5台机器
-        memory_size=200000  # memory大小
+        num_instances=configs.gen_instance_num,  # 生成1000个实例
+        n_jobs=configs.gen_job_num,  # 10个工件
+        m_machines=configs.gen_machine_num,  # 5台机器
+        memory_size=200000 , # memory大小
+        time_limit=configs.gen_time_limit
     )
     # memory.save('TestData_7_5')
-    memory.save('TrainData_7_5')
+    memory.save('TrainData' +str(configs.gen_instance_num) + '_' + str(configs.gen_job_num) + '_' + str(configs.gen_machine_num) + '_' + str(configs.gen_time_limit))

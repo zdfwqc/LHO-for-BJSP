@@ -14,5 +14,10 @@ parser.add_argument('--max_updates', type=int,default=10000)
 
 parser.add_argument('--epochs', type=int, default=1000)
 
+parser.add_argument('--gen_instance_num', type=int, default=1000)
+parser.add_argument('--gen_job_num', type=int, default=20)
+parser.add_argument('--gen_machine_num', type=int, default=20)
+parser.add_argument('--gen_time_limit', type=int, default=100)
+
 
 configs = parser.parse_args()
